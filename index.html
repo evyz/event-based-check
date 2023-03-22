@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+
+    <link rel="stylesheet" href="./index.css">
+</head>
+
+<body>
+
+    <div id="root">
+
+    </div>
+
+
+    <script>
+        let root = document.getElementById('root')
+
+        let _onces = []
+
+        WebSocket.prototype.emit = function (eventName, payload) {
+            this.send(JSON.stringify({ eventName, payload }));
+        }
+
+        function initServer() {
+            let nick = "123"
+
+            let ws = new WebSocket('ws://localhost:3000' + "?nick=" + nick)
+            ws.onopen = () => {
+                initMenu(ws)
+            }
+
+            ws.onmessage = function (event) {
+                let { type, payload, subscribeID, emitType } = JSON.parse(event.data)
+
+                let findedSubscribe = _onces.find(item => item.subscribeID == subscribeID)
+                if (!findedSubscribe) {
+                    throw new Error("NOT FOUND EVENT WITH SUBSCRIBEID => " + subscribeID)
+                }
+
+                switch (emitType) {
+                    case "load-data":
+                        findedSubscribe.params.fn(payload)
+                        break
+                }
+
+            }
+        }
+
+        function _emit(ws, eventName, params, once) {
+            if (once) {
+                let obj = { eventName, params, subscribeID: new Date().getTime() }
+                _onces.push(obj)
+                ws.emit(eventName, { ...params, subscribeID: obj.subscribeID })
+                return obj
+            }
+        }
+
+        function initMenu(ws) {
+            let header = document.createElement('header')
+            header.className = "default-header"
+            header["widget-type"] = "default-header"
+
+            let emit = _emit(ws, 'load-data', {
+                element: header, fn: function (payload) {
+
+                    payload.map(item => {
+                        let list = document.createElement('li')
+                        list.className = "header-list"
+                        let listKeys = Object.keys(item)
+                        for (let key of listKeys) {
+                            if (['id', 'title', 'type'].includes(key)) {
+                                list[key] = item[key]
+                                if (key === 'title') {
+                                    list.innerText = item[key]
+                                }
+                            }
+                        }
+
+
+                        if (item.childs && item.childs.length) {
+                            item.childs.map(child => {
+                                let childList = document.createElement('li')
+                                childList.className = "header-child-list"
+                                let childKeys = Object.keys(child)
+                                for (let key of childKeys) {
+                                    if (['id', 'title', 'type'].includes(key)) {
+                                        childList[key] = child[key]
+                                        if (key === 'title') {
+                                            childList.innerText = child[key]
+                                        }
+                                    }
+                                }
+
+                                list.append(childList)
+                            })
+                        }
+
+                        header.append(list)
+                    })
+                }
+            }, true)
+
+            let title = document.createElement('h2')
+            title.innerText = "Hello, world!"
+
+            header.append(title)
+
+            root.append(header)
+        }
+
+        function eventListener(data) {
+            console.log('data', data)
+        }
+
+
+        initServer()
+
+    </script>
+
+</body>
+
+</html>
