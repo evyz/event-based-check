@@ -3,7 +3,7 @@ const app = express();
 const expressWs = require("express-ws")(app);
 
 app.ws("/", (ws, req) => {
-  console.log("ws", ws);
+  console.log("connected");
 });
 
 app.listen(4000, () => {
