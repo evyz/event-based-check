@@ -22,41 +22,88 @@
         let root = document.getElementById('root')
 
         let _onces = []
+        let _ons = []
 
         WebSocket.prototype.emit = function (eventName, payload) {
             this.send(JSON.stringify({ eventName, payload }));
         }
 
+        function initElement(payload, ws, context) {
+            let { type, label, events, id, value, resValue } = payload
+
+            let elems = [
+                { code: "default-input", res: "input", className: "default-input" },
+                { code: "default-cell", res: "div", className: "default-cell" },
+                { code: "default-row", res: "row", className: "default-row" },
+                { code: "default-button", res: "button", className: "default-button" },
+            ]
+
+            let elem = elems.find(item => item.code === type)
+
+            let element = document.createElement(elem.res)
+            element.className = elem.className
+            element.id = id
+            element.setAttribute("widget-type", elem.code)
+            element.setAttribute('data-listener', value)
+
+            let div = document.createElement('div')
+            div.className = "default-wrapper-div"
+            if (label) {
+                if (elem.res === "button") {
+                    element.innerText = label
+                } else {
+                    let labelElement = document.createElement('label')
+                    labelElement.className = "default-label"
+                    labelElement.innerText = label
+
+                    div.append(labelElement)
+                }
+            }
+            if (resValue) {
+                element.value = resValue
+            }
+
+            if (events && events.length) {
+                events.forEach(({ type, method }) => {
+                    if (type === "onclick") {
+                        element.onclick = function (ev) {
+                            if (method) {
+                                let resContext = context()
+                                let emit = _emit(ws, 'call-method', { methodName: method }, true, resContext)
+                            }
+                        }
+                    }
+                })
+            }
+
+            div.append(element)
+
+            return div
+        }
+
         function initServer() {
             let nick = "123"
 
-            let ws = new WebSocket('ws://localhost:3000' + "?nick=" + nick)
+            let ws = new WebSocket('ws://localhost:4000' + "?nick=" + nick)
             ws.onopen = () => {
                 initMenu(ws)
             }
 
             ws.onmessage = function (event) {
-                let { type, payload, subscribeID, emitType } = JSON.parse(event.data)
-
-                let findedSubscribe = _onces.find(item => item.subscribeID == subscribeID)
-                if (!findedSubscribe) {
-                    throw new Error("NOT FOUND EVENT WITH SUBSCRIBEID => " + subscribeID)
-                }
-
-                switch (emitType) {
-                    case "load-data":
-                        findedSubscribe.params.fn(payload)
-                        break
-                }
-
+                eventListener(event)
             }
         }
 
-        function _emit(ws, eventName, params, once) {
+        function _emit(ws, eventName, params, once, context) {
             if (once) {
-                let obj = { eventName, params, subscribeID: new Date().getTime() }
+                let obj = { eventName, params, subscribeID: new Date().getTime(), context }
                 _onces.push(obj)
-                ws.emit(eventName, { ...params, subscribeID: obj.subscribeID })
+                ws.emit(eventName, { ...params, context, subscribeID: obj.subscribeID })
+                return obj
+            } else {
+                let obj = { eventName, params, subscribeID: new Date().getTime(), context }
+                _ons.push(obj)
+                ws.emit(eventName, { ...params, context, subscribeID: obj.subscribeID })
                 return obj
             }
         }
@@ -66,12 +113,15 @@
             header.className = "default-header"
             header["widget-type"] = "default-header"
 
+            let { activeWindow, activeWindowFn } = initWindow(ws)
+
             let emit = _emit(ws, 'load-data', {
                 element: header, fn: function (payload) {
 
                     payload.map(item => {
                         let list = document.createElement('li')
                         list.className = "header-list"
+
                         let listKeys = Object.keys(item)
                         for (let key of listKeys) {
                             if (['id', 'title', 'type'].includes(key)) {
@@ -96,6 +146,14 @@
                                         }
                                     }
                                 }
+                                childList.onclick = function (ev) {
+                                    let emit = _emit(ws, 'check-changes', {
+                                        element: activeWindow, templateID: child.templateID, fn: function (payload, error) {
+                                            console.log('aaa', payload, error)
+                                            activeWindowFn(payload, error)
+                                        }
+                                    })
+                                }
 
                                 list.append(childList)
                             })
@@ -112,12 +170,104 @@
             header.append(title)
 
             root.append(header)
+
         }
 
-        function eventListener(data) {
-            console.log('data', data)
+        function eventListener(event) {
+            let { type, payload, subscribeID, emitType, error } = JSON.parse(event.data)
+
+
+            let isOnces = false
+
+            let findedSubscribe = _onces.find(item => item.subscribeID == subscribeID)
+            if (!findedSubscribe) {
+                findedSubscribe = _ons.find(item => item.subscribeID == subscribeID)
+                if (!findedSubscribe) {
+                    throw new Error("NOT FOUND EVENT WITH SUBSCRIBEID => " + subscribeID)
+                }
+            }
+
+            isOnces = true
+
+            switch (emitType) {
+                case "load-data":
+                    findedSubscribe.params.fn(payload, error)
+                    break
+
+                case "check-changes":
+                    findedSubscribe.params.fn(payload, error)
+                    break
+            }
+
+            if (isOnces) {
+                let index = _onces.findIndex(item => item.subscribeID === subscribeID)
+                _onces.splice(index, 1)
+            }
         }
 
+        function getContextFromTemplate(template, content) {
+            let childContext = []
+
+            if (content && content.length) {
+                content.map(item => {
+                    let elem = document.getElementById(item.id)
+
+                    switch (elem.getAttribute('widget-type')) {
+                        case "default-input":
+                            childContext.push({ element: elem, value: elem.value, nameValue: elem.getAttribute('data-listener') })
+                            break
+                    }
+                })
+            }
+
+            return {
+                context: { title: template.innerText, childContext }
+            }
+        }
+
+        function initWindow(ws) {
+            let activeWindow = document.createElement('div')
+            activeWindow.className = "default-window"
+            activeWindow['widget-type'] = 'default-window'
+
+            let fn = function (payload, error) {
+                if (error) {
+                    activeWindow.innerHTML = null
+                    let errorTemplate = document.createElement('div')
+                    errorTemplate.innerText = error
+                    activeWindow.append(errorTemplate)
+                }
+                if (payload?.id) {
+                    activeWindow.innerHTML = null
+                    let template = document.createElement('div')
+                    template["templateID"] = payload?.templateID
+
+                    let title = document.createElement('h4')
+                    title.innerText = payload?.title
+
+                    template.append(title)
+
+                    if (payload && payload?.content) {
+                        payload?.content.forEach(item => {
+                            let element = initElement(item, ws, () => getContextFromTemplate(template, payload?.content))
+                            template.append(element)
+                        })
+                    }
+
+                    activeWindow.append(template)
+                }
+            }
+
+            let emit = setTimeout(() => {
+                _emit(ws, 'check-changes', {
+                    element: activeWindow, templateID: 2, fn: fn
+                })
+            }, 10)
+
+            root.append(activeWindow)
+
+            return { activeWindow, activeWindowFn: fn }
+        }
 
         initServer()
 
